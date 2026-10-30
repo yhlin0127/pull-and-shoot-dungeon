@@ -1,5 +1,5 @@
 import { Canvas, Circle, Group, Path, Rect } from '@shopify/react-native-skia';
-import { useReducer } from 'react';
+import { useReducer, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { GestureDetector, usePanGesture } from 'react-native-gesture-handler';
 import {
@@ -34,12 +34,12 @@ import {
   type Vec,
   type WorldPoint,
 } from './camera';
+import { createGame } from './game/model';
+import { FIRST_FLOOR } from './game/firstFloor';
+import { PLACEHOLDER_TUNING } from './game/placeholder';
 
 const TUNING = {
-  world: { width: 1200, height: 2000 },
-  spawn: worldPoint(600, 1400),
-  playerRadius: 18,
-  aim: { touchRadius: 44, minPull: 12, maxPull: 120, maxShotDistance: 360 },
+  aim: { touchRadius: 44, minPull: 12, maxPull: 120 },
   shotMs: 600,
   recenterMs: 400,
   arrowLengthAtFullPower: 140,
@@ -47,18 +47,21 @@ const TUNING = {
   gridSpacing: 100,
 };
 
-const LANDMARKS = [
-  { x: 240, y: 300, r: 48 },
-  { x: 980, y: 620, r: 64 },
-  { x: 760, y: 1180, r: 40 },
-  { x: 330, y: 1720, r: 56 },
-];
+const AIM = {
+  ...TUNING.aim,
+  maxShotDistance: PLACEHOLDER_TUNING.launch.maxDistance,
+};
 
 const COLORS = {
   floor: '#ece7dc',
   grid: '#d3ccbd',
   border: '#4a453d',
-  landmark: '#a9a49b',
+  objective: 'rgba(47, 125, 82, 0.35)',
+  objectiveStroke: '#1f6b45',
+  spawn: '#6b645c',
+  wall: '#5c564c',
+  enemy: '#c92a2a',
+  enemyOutline: '#5c1010',
   player: '#2f6fde',
   playerOutline: '#0b1f4a',
   pull: 'rgba(30, 30, 30, 0.25)',
@@ -75,13 +78,11 @@ function gridPath({ width, height }: Size, spacing: number): string {
   return lines.join(' ');
 }
 
-const GRID_PATH = gridPath(TUNING.world, TUNING.gridSpacing);
-
-function arrowPath(player: WorldPoint, aim: Aim): string {
+function arrowPath(player: WorldPoint, aim: Aim, radius: number): string {
   'worklet';
   const { x: dx, y: dy } = aim.direction;
-  const tailX = player.x + dx * TUNING.playerRadius;
-  const tailY = player.y + dy * TUNING.playerRadius;
+  const tailX = player.x + dx * radius;
+  const tailY = player.y + dy * radius;
   const length = aim.power * TUNING.arrowLengthAtFullPower;
   const tipX = tailX + dx * length;
   const tipY = tailY + dy * length;
@@ -144,36 +145,47 @@ function formatShot(shot: AimRelease | null): string {
   return `Shot: launched · power ${Math.round(shot.power * 100)}% · direction (${x.toFixed(2)}, ${y.toFixed(2)})`;
 }
 
-export function Playfield() {
+function formatStats(radius: number, health: number, maxHealth: number, damage: number): string {
+  return `radius ${radius} · health ${health}/${maxHealth} · damage ${damage}`;
+}
+
+export function Playfield({ onRestart }: { onRestart: () => void }) {
+  const [game] = useState(() => createGame(FIRST_FLOOR));
+  const world = game.floor.bounds;
+  const playerRadius = game.player.radius;
   const viewport = useSafeAreaFrame();
   const insets = useSafeAreaInsets();
-  const initialCamera = cameraCenteredOn(TUNING.spawn, viewport, TUNING.world);
+  const initialCamera = cameraCenteredOn(game.player.position, viewport, world);
 
   const camera = useSharedValue<Camera>(initialCamera);
-  const player = useSharedValue<WorldPoint>(TUNING.spawn);
+  const player = useSharedValue<WorldPoint>(game.player.position);
   const sequence = useSharedValue<TouchSequence>(IDLE);
   const shotInFlight = useSharedValue(false);
   const [hud, dispatch] = useReducer(hudReducer, {
     camera: initialCamera,
-    player: TUNING.spawn,
+    player: game.player.position,
     touch: null,
     shot: null,
     shotsFired: 0,
   });
 
   const pan = usePanGesture({
+    testID: 'playfield-pan',
     minDistance: 0,
     onBegin: (event) => {
       cancelAnimation(camera);
       const screen = screenPoint(event.x, event.y);
-      const world = screenToWorld(screen, camera.get());
-      const owner = ownerForTouch(world, player.get(), !shotInFlight.get(), TUNING.aim);
+      const worldPointAtTouch = screenToWorld(screen, camera.get());
+      const owner = ownerForTouch(worldPointAtTouch, player.get(), !shotInFlight.get(), AIM);
       sequence.set(
         owner === 'aim'
-          ? { kind: 'aiming', anchor: world, finger: world }
+          ? { kind: 'aiming', anchor: worldPointAtTouch, finger: worldPointAtTouch }
           : { kind: 'panning', startCamera: camera.get() },
       );
-      scheduleOnRN(dispatch, { type: 'touch-start', touch: { owner, screen, world } });
+      scheduleOnRN(dispatch, {
+        type: 'touch-start',
+        touch: { owner, screen, world: worldPointAtTouch },
+      });
     },
     onUpdate: (event) => {
       const current = sequence.get();
@@ -186,7 +198,7 @@ export function Playfield() {
           clampCamera(
             worldPoint(startCamera.x - event.translationX, startCamera.y - event.translationY),
             viewport,
-            TUNING.world,
+            world,
           ),
         );
       }
@@ -197,14 +209,14 @@ export function Playfield() {
       if (ended.kind === 'panning') {
         scheduleOnRN(dispatch, { type: 'camera-settled', camera: camera.get() });
       } else if (ended.kind === 'aiming') {
-        const release = resolveRelease(ended.anchor, ended.finger, event.canceled, TUNING.aim);
+        const release = resolveRelease(ended.anchor, ended.finger, event.canceled, AIM);
         if (release.kind === 'launch') {
           const destination = shotDestination(
             player.get(),
             release,
-            TUNING.aim,
-            TUNING.world,
-            TUNING.playerRadius,
+            AIM,
+            world,
+            playerRadius,
           );
           shotInFlight.set(true);
           player.set(
@@ -226,7 +238,7 @@ export function Playfield() {
   const recenter = () => {
     camera.set(
       withTiming(
-        cameraCenteredOn(player.get(), viewport, TUNING.world),
+        cameraCenteredOn(player.get(), viewport, world),
         { duration: TUNING.recenterMs, easing: Easing.inOut(Easing.cubic) },
         () => {
           scheduleOnRN(dispatch, { type: 'camera-settled', camera: camera.get() });
@@ -241,13 +253,11 @@ export function Playfield() {
   });
   const aim = useDerivedValue(() => {
     const current = sequence.get();
-    return current.kind === 'aiming'
-      ? aimFromPull(current.anchor, current.finger, TUNING.aim)
-      : null;
+    return current.kind === 'aiming' ? aimFromPull(current.anchor, current.finger, AIM) : null;
   });
   const arrow = useDerivedValue(() => {
     const current = aim.get();
-    return current === null ? '' : arrowPath(player.get(), current);
+    return current === null ? '' : arrowPath(player.get(), current, playerRadius);
   });
   const arrowColor = useDerivedValue(() => (aim.get()?.armed ? COLORS.armed : COLORS.unarmed));
   const pullLine = useDerivedValue(() => {
@@ -257,16 +267,67 @@ export function Playfield() {
     return `M ${x} ${y} L ${x + current.finger.x - current.anchor.x} ${y + current.finger.y - current.anchor.y}`;
   });
 
-  const { width, height } = TUNING.world;
+  const { width, height } = world;
+  const { objective, spawn, walls } = game.floor;
+  const grid = gridPath(world, TUNING.gridSpacing);
   return (
     <View style={styles.root}>
       <GestureDetector gesture={pan}>
         <Canvas style={styles.root}>
           <Group transform={worldTransform}>
             <Rect x={0} y={0} width={width} height={height} color={COLORS.floor} />
-            <Path path={GRID_PATH} style="stroke" strokeWidth={1} color={COLORS.grid} />
-            {LANDMARKS.map(({ x, y, r }) => (
-              <Circle key={`${x},${y}`} cx={x} cy={y} r={r} color={COLORS.landmark} />
+            <Path path={grid} style="stroke" strokeWidth={1} color={COLORS.grid} />
+            <Rect
+              x={objective.x}
+              y={objective.y}
+              width={objective.width}
+              height={objective.height}
+              color={COLORS.objective}
+            />
+            <Rect
+              x={objective.x}
+              y={objective.y}
+              width={objective.width}
+              height={objective.height}
+              style="stroke"
+              strokeWidth={3}
+              color={COLORS.objectiveStroke}
+            />
+            <Circle
+              cx={spawn.x}
+              cy={spawn.y}
+              r={playerRadius}
+              style="stroke"
+              strokeWidth={2}
+              color={COLORS.spawn}
+            />
+            {walls.map((wall, index) => (
+              <Rect
+                key={index}
+                x={wall.x}
+                y={wall.y}
+                width={wall.width}
+                height={wall.height}
+                color={COLORS.wall}
+              />
+            ))}
+            {game.enemies.map((enemy) => (
+              <Group key={enemy.id}>
+                <Circle
+                  cx={enemy.position.x}
+                  cy={enemy.position.y}
+                  r={enemy.radius}
+                  color={COLORS.enemy}
+                />
+                <Circle
+                  cx={enemy.position.x}
+                  cy={enemy.position.y}
+                  r={enemy.radius}
+                  style="stroke"
+                  strokeWidth={3}
+                  color={COLORS.enemyOutline}
+                />
+              </Group>
             ))}
             <Rect
               x={0}
@@ -284,10 +345,10 @@ export function Playfield() {
               strokeCap="round"
               color={COLORS.pull}
             />
-            <Circle c={player} r={TUNING.playerRadius} color={COLORS.player} />
+            <Circle c={player} r={playerRadius} color={COLORS.player} />
             <Circle
               c={player}
-              r={TUNING.playerRadius}
+              r={playerRadius}
               style="stroke"
               strokeWidth={3}
               color={COLORS.playerOutline}
@@ -320,7 +381,35 @@ export function Playfield() {
           <Text testID="hud-shots" style={styles.hudLine}>
             Shots fired: {hud.shotsFired}
           </Text>
+          <Text testID="hud-turn" style={styles.hudLine}>
+            {`Turn: ${game.turn} · ${game.phase.kind}`}
+          </Text>
+          <Text testID="hud-floor" style={styles.hudLine}>
+            {`Floor: ${width} x ${height} · ${walls.length} walls · spawn ${formatPoint(spawn)}`}
+          </Text>
+          <Text testID="hud-objective" style={styles.hudLine}>
+            {`Objective: ${formatPoint(objective)} ${objective.width} x ${objective.height}`}
+          </Text>
+          <Text testID="hud-player-stats" style={styles.hudLine}>
+            {`Player stats: ${formatStats(game.player.radius, game.player.health, game.player.maxHealth, game.player.damage)}`}
+          </Text>
+          {game.enemies.map((enemy) => (
+            <Text key={enemy.id} testID={`hud-enemy-${enemy.id}`} style={styles.hudLine}>
+              {`Enemy ${enemy.id}: ${formatPoint(enemy.position)} · ${formatStats(enemy.radius, enemy.health, enemy.maxHealth, enemy.damage)}`}
+            </Text>
+          ))}
         </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Restart"
+          onPress={onRestart}
+          style={({ pressed }) => [
+            styles.restart,
+            { bottom: insets.bottom + 16, opacity: pressed ? 0.7 : 1 },
+          ]}
+        >
+          <Text style={styles.cornerLabel}>Restart</Text>
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Recenter"
@@ -330,7 +419,7 @@ export function Playfield() {
             { bottom: insets.bottom + 16, opacity: pressed ? 0.7 : 1 },
           ]}
         >
-          <Text style={styles.recenterLabel}>Recenter</Text>
+          <Text style={styles.cornerLabel}>Recenter</Text>
         </Pressable>
       </View>
     </View>
@@ -347,7 +436,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     backgroundColor: 'rgba(255, 255, 255, 0.82)',
   },
-  hudLine: { fontSize: 13, color: '#1d1b18', fontVariant: ['tabular-nums'] },
+  hudLine: { fontSize: 12, color: '#1d1b18', fontVariant: ['tabular-nums'] },
+  restart: {
+    position: 'absolute',
+    left: 16,
+    minWidth: 44,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: 22,
+    backgroundColor: '#1d1b18',
+  },
   recenter: {
     position: 'absolute',
     right: 16,
@@ -359,5 +459,5 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     backgroundColor: '#1d1b18',
   },
-  recenterLabel: { color: '#ffffff', fontSize: 16, fontWeight: '600' },
+  cornerLabel: { color: '#ffffff', fontSize: 16, fontWeight: '600' },
 });

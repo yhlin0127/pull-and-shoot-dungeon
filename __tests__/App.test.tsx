@@ -41,21 +41,21 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: 'Restart' })).toBeOnTheScreen();
   });
 
-  it('returns every HUD line to its initial text after a touch and Restart', async () => {
+  it('returns every HUD line to its initial text after the camera moves and Restart', async () => {
     await render(<App />);
     await act(async () => {
       fireGestureHandler(getByGestureTestId('playfield-pan'), [
         { state: State.BEGAN, x: 20, y: 200 },
-        { state: State.END, x: 20, y: 200 },
+        { state: State.ACTIVE, x: 20, y: 200, translationX: 0, translationY: 0 },
+        { state: State.ACTIVE, x: 0, y: 150, translationX: -20, translationY: 50 },
+        { state: State.END, x: 0, y: 150, translationX: -20, translationY: 50 },
       ]);
       await new Promise<void>((resolve) => {
         setImmediate(() => resolve());
       });
     });
 
-    expect(screen.getByTestId('hud-touch')).toHaveTextContent(
-      'Touch: pan · screen (20, 200) → world (540, 1240)',
-    );
+    expect(screen.getByTestId('hud-camera')).toHaveTextContent('Camera: (540, 990)');
 
     await fireEvent.press(screen.getByRole('button', { name: 'Restart' }));
 

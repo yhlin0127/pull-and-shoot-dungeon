@@ -1,10 +1,19 @@
-import { worldPoint, type Camera, type Size, type Vec, type WorldPoint } from './camera';
+import {
+  worldPoint,
+  type Camera,
+  type ScreenPoint,
+  type Size,
+  type Vec,
+  type WorldPoint,
+} from './camera';
 
 export type TouchOwner = 'aim' | 'pan';
 
+export type Pull = { anchor: ScreenPoint; finger: ScreenPoint };
+
 export type TouchSequence =
   | { kind: 'idle' }
-  | { kind: 'aiming'; anchor: WorldPoint; finger: WorldPoint }
+  | ({ kind: 'aiming' } & Pull)
   | { kind: 'panning'; startCamera: Camera };
 
 export type AimConfig = {
@@ -14,7 +23,7 @@ export type AimConfig = {
   maxShotDistance: number;
 };
 
-export type Aim = { direction: Vec; power: number; armed: boolean };
+export type Aim = { pull: Vec; direction: Vec; power: number; armed: boolean };
 
 export type Launch = { kind: 'launch'; direction: Vec; power: number };
 
@@ -31,26 +40,22 @@ export function ownerForTouch(
   return playerAtRest && distance <= config.touchRadius ? 'aim' : 'pan';
 }
 
-export function aimFromPull(anchor: WorldPoint, finger: WorldPoint, config: AimConfig): Aim {
+export function aimFromPull(pull: Pull, config: AimConfig): Aim {
   'worklet';
-  const pullX = finger.x - anchor.x;
-  const pullY = finger.y - anchor.y;
-  const pull = Math.hypot(pullX, pullY);
+  const pullX = pull.finger.x - pull.anchor.x;
+  const pullY = pull.finger.y - pull.anchor.y;
+  const length = Math.hypot(pullX, pullY);
   return {
-    direction: pull === 0 ? { x: 0, y: 0 } : { x: -pullX / pull, y: -pullY / pull },
-    power: Math.min(pull, config.maxPull) / config.maxPull,
-    armed: pull >= config.minPull,
+    pull: { x: pullX, y: pullY },
+    direction: length === 0 ? { x: 0, y: 0 } : { x: -pullX / length, y: -pullY / length },
+    power: Math.min(length, config.maxPull) / config.maxPull,
+    armed: length >= config.minPull,
   };
 }
 
-export function resolveRelease(
-  anchor: WorldPoint,
-  finger: WorldPoint,
-  canceled: boolean,
-  config: AimConfig,
-): AimRelease {
+export function resolveRelease(pull: Pull, canceled: boolean, config: AimConfig): AimRelease {
   'worklet';
-  const aim = aimFromPull(anchor, finger, config);
+  const aim = aimFromPull(pull, config);
   if (!aim.armed) {
     return { kind: 'cancelled', reason: 'too-short' };
   }

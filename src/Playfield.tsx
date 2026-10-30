@@ -172,15 +172,17 @@ export function Playfield({ onRestart }: { onRestart: () => void }) {
   const pan = usePanGesture({
     testID: 'playfield-pan',
     minDistance: 0,
+    maxPointers: 1,
     onBegin: (event) => {
       cancelAnimation(camera);
       const screen = screenPoint(event.x, event.y);
-      const worldPointAtTouch = screenToWorld(screen, camera.get());
+      const cameraAtTouch = camera.get();
+      const worldPointAtTouch = screenToWorld(screen, cameraAtTouch);
       const owner = ownerForTouch(worldPointAtTouch, player.get(), !shotInFlight.get(), AIM);
       sequence.set(
         owner === 'aim'
-          ? { kind: 'aiming', anchor: worldPointAtTouch, finger: worldPointAtTouch }
-          : { kind: 'panning', startCamera: camera.get() },
+          ? { kind: 'aiming', anchor: screen, finger: screen }
+          : { kind: 'panning', startCamera: cameraAtTouch },
       );
       scheduleOnRN(dispatch, {
         type: 'touch-start',
@@ -190,8 +192,7 @@ export function Playfield({ onRestart }: { onRestart: () => void }) {
     onUpdate: (event) => {
       const current = sequence.get();
       if (current.kind === 'aiming') {
-        const finger = screenToWorld(screenPoint(event.x, event.y), camera.get());
-        sequence.set({ ...current, finger });
+        sequence.set({ ...current, finger: screenPoint(event.x, event.y) });
       } else if (current.kind === 'panning') {
         const { startCamera } = current;
         camera.set(
@@ -209,7 +210,7 @@ export function Playfield({ onRestart }: { onRestart: () => void }) {
       if (ended.kind === 'panning') {
         scheduleOnRN(dispatch, { type: 'camera-settled', camera: camera.get() });
       } else if (ended.kind === 'aiming') {
-        const release = resolveRelease(ended.anchor, ended.finger, event.canceled, AIM);
+        const release = resolveRelease(ended, event.canceled, AIM);
         if (release.kind === 'launch') {
           const destination = shotDestination(
             player.get(),
@@ -253,7 +254,7 @@ export function Playfield({ onRestart }: { onRestart: () => void }) {
   });
   const aim = useDerivedValue(() => {
     const current = sequence.get();
-    return current.kind === 'aiming' ? aimFromPull(current.anchor, current.finger, AIM) : null;
+    return current.kind === 'aiming' ? aimFromPull(current, AIM) : null;
   });
   const arrow = useDerivedValue(() => {
     const current = aim.get();
@@ -261,10 +262,10 @@ export function Playfield({ onRestart }: { onRestart: () => void }) {
   });
   const arrowColor = useDerivedValue(() => (aim.get()?.armed ? COLORS.armed : COLORS.unarmed));
   const pullLine = useDerivedValue(() => {
-    const current = sequence.get();
-    if (current.kind !== 'aiming') return '';
+    const current = aim.get();
+    if (current === null) return '';
     const { x, y } = player.get();
-    return `M ${x} ${y} L ${x + current.finger.x - current.anchor.x} ${y + current.finger.y - current.anchor.y}`;
+    return `M ${x} ${y} L ${x + current.pull.x} ${y + current.pull.y}`;
   });
 
   const { width, height } = world;

@@ -55,6 +55,7 @@ describe('createGame', () => {
       enemies: [{ ...door, health: 1 }, corner],
     };
 
+    expect(played).not.toEqual(createGame(floor));
     expect(createGame(played.floor)).toEqual(createGame(floor));
   });
 });

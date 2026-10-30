@@ -6,7 +6,7 @@ export const FIRST_FLOOR: Floor = {
   walls: [
     { x: 0, y: 1176, width: 400, height: 24 },
     { x: 560, y: 1176, width: 400, height: 24 },
-    // Thinner than the player, one max launch west of the spawn, for P1-04's thin-wall case.
+    // Thinner than the player, within one max launch west of the spawn, for P1-04's thin-wall case.
     { x: 400, y: 1440, width: 8, height: 240 },
     { x: 720, y: 960, width: 80, height: 80 },
     { x: 0, y: 616, width: 840, height: 24 },

@@ -85,11 +85,11 @@ describe('FIRST_FLOOR', () => {
     }
   });
 
-  it("has a wall thinner than the player's diameter", () => {
-    const diameter = 2 * PLACEHOLDER_TUNING.player.radius;
+  it("has one wall thinner than the player's radius", () => {
+    const thin = FIRST_FLOOR.walls.filter(
+      (wall) => Math.min(wall.width, wall.height) < PLACEHOLDER_TUNING.player.radius,
+    );
 
-    expect(
-      FIRST_FLOOR.walls.some((wall) => Math.min(wall.width, wall.height) < diameter),
-    ).toBe(true);
+    expect(thin).toEqual([{ x: 400, y: 1440, width: 8, height: 240 }]);
   });
 });
